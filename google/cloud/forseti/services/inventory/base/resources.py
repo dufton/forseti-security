@@ -226,12 +226,12 @@ class Organization(Resource):
     def fetch(cls, client, resource_key):
         try:
             data = client.fetch_organization(resource_key)
-        except Execption as e:
-            self.add_warning(e)
-            data = {
-                'name': 'organizations/{}'.format(resource_key),
-            }
-        return FACTORIES['organization'].create_new(data, root=True)
+            return FACTORIES['organization'].create_new(data, root=True)
+        except Exception as e:
+            data = {'name': resource_key}
+            resource = FACTORIES['restricted-organization'].create_new(data, root=True)
+            resource.add_warning(e)
+            return resource
 
     @cached('iam_policy')
     def get_iam_policy(self, client=None):
@@ -916,6 +916,14 @@ FACTORIES = {
             FolderIterator,
             OrganizationRoleIterator,
             OrganizationCuratedRoleIterator,
+            ProjectIterator,
+            ]}),
+    
+    'restricted-organization': ResourceFactory({
+        'dependsOn': [],
+        'cls': Organization,
+        'contains': [
+            FolderIterator,
             ProjectIterator,
             ]}),
 
