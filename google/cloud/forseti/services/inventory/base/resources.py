@@ -224,12 +224,22 @@ class Resource(object):
 class Organization(Resource):
     @classmethod
     def fetch(cls, client, resource_key):
-        data = client.fetch_organization(resource_key)
+        try:
+            data = client.fetch_organization(resource_key)
+        except Execption as e:
+            self.add_warning(e)
+            data = {
+                'name': 'organizations/{}'.format(resource_key),
+            }
         return FACTORIES['organization'].create_new(data, root=True)
 
     @cached('iam_policy')
     def get_iam_policy(self, client=None):
-        return client.get_organization_iam_policy(self['name'])
+        try:
+            return client.get_organization_iam_policy(self['name'])
+        except Exception as e:
+            self.add_warning(e)
+            return None
 
     def key(self):
         return self['name'].split('/', 1)[-1]
