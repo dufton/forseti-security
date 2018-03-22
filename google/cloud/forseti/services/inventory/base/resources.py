@@ -925,6 +925,7 @@ FACTORIES = {
         'contains': [
             FolderIterator,
             ProjectIterator,
+            OrganizationCuratedRoleIterator,
             ]}),
 
     'folder': ResourceFactory({
