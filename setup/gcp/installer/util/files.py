@@ -17,23 +17,25 @@
 from __future__ import print_function
 import os
 
+import ruamel.yaml
+
 import constants
 import utils
 
 
-def generate_deployment_templates(template_type, values, datetimestamp):
+def generate_deployment_templates(template_type, values, timestamp):
     """Generate deployment templates.
 
     Args:
-        template_type (str): Type of the template, either cli or server
-        values (dict): Values needed for deployment
-        datetimestamp (str): Timestamp
+        template_type (str): Type of the template, either cli or server.
+        values (dict): Values needed for deployment.
+        timestamp (str): Timestamp.
 
     Returns:
-        str: Path of the deployment template
+        str: Path of the deployment template.
 
     Raises:
-        KeyError: KeyError
+        KeyError: KeyError.
     """
 
     template_type = template_type.lower()
@@ -55,7 +57,7 @@ def generate_deployment_templates(template_type, values, datetimestamp):
         os.path.join(
             constants.ROOT_DIR_PATH,
             'deployment-templates',
-            'deploy-forseti-{}-{}.yaml'.format(template_type, datetimestamp)))
+            'deploy-forseti-{}-{}.yaml'.format(template_type, timestamp)))
 
     if generate_file_from_template(deploy_tpl_path,
                                    out_tpl_path,
@@ -66,13 +68,13 @@ def generate_deployment_templates(template_type, values, datetimestamp):
     return None
 
 
-def generate_forseti_conf(template_type, vals, datetimestamp):
+def generate_forseti_conf(template_type, vals, timestamp):
     """Generate Forseti conf file.
 
     Args:
         template_type (str): Type of the template, either cli or server
         vals (dict): Values needed for deployment
-        datetimestamp (str): Timestamp
+        timestamp (str): Timestamp
 
     Returns:
         str: Path of the deployment template
@@ -96,7 +98,7 @@ def generate_forseti_conf(template_type, vals, datetimestamp):
     forseti_conf_gen = os.path.abspath(
         os.path.join(
             constants.ROOT_DIR_PATH, 'configs', template_type,
-            'forseti_conf_{}_{}.yaml'.format(template_type, datetimestamp)))
+            'forseti_conf_{}_{}.yaml'.format(template_type, timestamp)))
 
     conf_values = utils.sanitize_conf_values(vals)
 
@@ -113,8 +115,8 @@ def update_rule_files(values, rule_dir_path):
     """Update rule files default values.
 
     Args:
+        values (dict): Default values needed for deployment.
         rule_dir_path (str): Rule directory path.
-        values (dict): Values needed for deployment
 
     Raises:
         KeyError: KeyError
@@ -155,7 +157,7 @@ def generate_file_from_template(template_path, output_path, template_values):
 
 
 def copy_file_to_destination(file_path, output_path,
-                             is_directory, dry_run):
+                             is_directory=False, dry_run=False):
     """Copy the config to the created bucket.
 
     Args:
@@ -168,10 +170,7 @@ def copy_file_to_destination(file_path, output_path,
         bool: True if copy file succeeded, otherwise False.
     """
 
-    utils.print_banner('Copying {} to {}'.format(file_path, output_path))
-
     if dry_run:
-        print('This is a dry run, so skipping this step.')
         return False
 
     if is_directory:
@@ -179,10 +178,41 @@ def copy_file_to_destination(file_path, output_path,
     else:
         args = ['gsutil', 'cp', file_path, output_path]
 
-    return_code, out, err = utils.run_command(args)
+    return_code, _, _ = utils.run_command(args)
     if return_code:
-        print(err)
-    else:
-        print(out)
-        return True
-    return False
+        return False
+    return True
+
+
+def read_yaml_file_from_local(file_path):
+    """Load file from local path.
+
+    Args:
+      file_path (str): The path to the file.
+
+    Returns:
+        dict: The parsed dict from the loaded file.
+
+    Raises:
+        YAMLError: Yaml error.
+    """
+
+    with open(os.path.abspath(file_path), 'r') as f:
+        try:
+            return ruamel.yaml.load(f, Loader=ruamel.yaml.RoundTripLoader)
+        except ruamel.yaml.YAMLError as yaml_error:
+            raise yaml_error
+
+
+def write_data_to_yaml_file(data, output_file_path):
+    """Write data to yaml file.
+
+    Args:
+        data (dict): A yaml data stream to parse.
+        output_file_path (str): Output file path.
+    """
+
+    with open(output_file_path, 'w') as outfile:
+        ruamel.yaml.dump(data, outfile,
+                         Dumper=ruamel.yaml.RoundTripDumper,
+                         indent=4)

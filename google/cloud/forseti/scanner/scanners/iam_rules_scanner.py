@@ -14,22 +14,80 @@
 
 """Scanner for the IAM rules engine."""
 
-from datetime import datetime
-import os
+import json
 import sys
 
-from google.cloud.forseti.common.data_access import csv_writer
+from google.cloud.forseti.common.gcp_type.bucket import Bucket
 from google.cloud.forseti.common.gcp_type.folder import Folder
+from google.cloud.forseti.common.gcp_type import iam_policy
 from google.cloud.forseti.common.gcp_type.organization import Organization
 from google.cloud.forseti.common.gcp_type.project import Project
 from google.cloud.forseti.common.gcp_type.resource import ResourceType
 from google.cloud.forseti.common.util import logger
-from google.cloud.forseti.notifier import notifier
 from google.cloud.forseti.scanner.audit import iam_rules_engine
 from google.cloud.forseti.scanner.scanners import base_scanner
 
-
 LOGGER = logger.get_logger(__name__)
+
+
+# pylint: disable=too-many-branches
+def _add_bucket_ancestor_bindings(policy_data):
+    """Add bucket relevant IAM policy bindings from ancestors.
+
+    Resources can inherit policy bindings from ancestors in the resource
+    manager tree. For example: a GCS bucket inherits a 'objectViewer' role
+    from a project or folder (up in the tree).
+
+    So far the IAM rules engine only checks the set of bindings directly
+    attached to a resource (direct bindings set (DBS)). We need to add
+    relevant bindings inherited from ancestors to DBS so that these are
+    also checked for violations.
+
+    If we find one more than one binding with the same role name, we need to
+    merge the members.
+
+    NOTA BENE: this function only handles buckets and bindings relevant to
+    these at present (but can and should be expanded to handle projects and
+    folders going forward).
+
+    Args:
+        policy_data (list): list of (parent resource, iam_policy resource,
+            policy bindings) tuples to find violations in.
+    """
+    storage_iam_roles = frozenset([
+        'roles/storage.admin',
+        'roles/storage.objectViewer',
+        'roles/storage.objectCreator',
+        'roles/storage.objectAdmin',
+    ])
+    bucket_data = []
+    for (resource, _, bindings) in policy_data:
+        if resource.type == 'bucket':
+            bucket_data.append((resource, bindings))
+
+    for bucket, bucket_bindings in bucket_data:
+        all_ancestor_bindings = []
+        for (resource, _, bindings) in policy_data:
+            if resource.full_name == bucket.full_name:
+                continue
+            if bucket.full_name.find(resource.full_name):
+                continue
+            all_ancestor_bindings.append(bindings)
+
+        for ancestor_bindings in all_ancestor_bindings:
+            for ancestor_binding in ancestor_bindings:
+                if ancestor_binding.role_name not in storage_iam_roles:
+                    continue
+                if ancestor_binding in bucket_bindings:
+                    continue
+                # Do we have a binding with the same 'role_name' already?
+                for bucket_binding in bucket_bindings:
+                    if bucket_binding.role_name == ancestor_binding.role_name:
+                        bucket_binding.merge_members(ancestor_binding)
+                        break
+                else:
+                    # no, add ancestor binding.
+                    bucket_bindings.append(ancestor_binding)
 
 
 class IamPolicyScanner(base_scanner.BaseScanner):
@@ -73,10 +131,11 @@ class IamPolicyScanner(base_scanner.BaseScanner):
         """
         for violation in violations:
             for member in violation.members:
-                violation_data = {}
-                violation_data['full_name'] = violation.full_name
-                violation_data['role'] = violation.role
-                violation_data['member'] = '%s:%s' % (member.type, member.name)
+                violation_data = {
+                    'full_name': violation.full_name,
+                    'role': violation.role, 'member': '%s:%s' % (member.type,
+                                                                 member.name)
+                }
 
                 yield {
                     'resource_id': violation.resource_id,
@@ -89,86 +148,34 @@ class IamPolicyScanner(base_scanner.BaseScanner):
                     'inventory_data': violation.inventory_data
                 }
 
-    def _output_results(self, all_violations, resource_counts):
+    def _output_results(self, all_violations):
         """Output results.
 
         Args:
-            all_violations (list): A list of violations
-            resource_counts (dict): Resource count map.
+            all_violations (list): A list of violations.
         """
-        resource_name = 'violations'
-
-        all_violations = list(self._flatten_violations(all_violations))
-        violation_errors = self._output_results_to_db(all_violations)
-
-        # Write the CSV for all the violations.
-        # TODO: Move this into the base class? The IAP scanner version of this
-        # is a wholesale copy.
-        if self.scanner_configs.get('output_path'):
-            LOGGER.info('Writing violations to csv...')
-            output_csv_name = None
-            with csv_writer.write_csv(
-                resource_name=resource_name,
-                data=all_violations,
-                write_header=True) as csv_file:
-                output_csv_name = csv_file.name
-                LOGGER.info('CSV filename: %s', output_csv_name)
-
-                # Scanner timestamp for output file and email.
-                now_utc = datetime.utcnow()
-
-                output_path = self.scanner_configs.get('output_path')
-                if not output_path.startswith('gs://'):
-                    if not os.path.exists(
-                            self.scanner_configs.get('output_path')):
-                        os.makedirs(output_path)
-                    output_path = os.path.abspath(output_path)
-                self._upload_csv(output_path, now_utc, output_csv_name)
-
-                # Send summary email.
-                # TODO: Untangle this email by looking for the csv content
-                # from the saved copy.
-                if self.global_configs.get('email_recipient') is not None:
-                    payload = {
-                        'email_description': 'Policy Scan',
-                        'email_sender':
-                            self.global_configs.get('email_sender'),
-                        'email_recipient':
-                            self.global_configs.get('email_recipient'),
-                        'sendgrid_api_key':
-                            self.global_configs.get('sendgrid_api_key'),
-                        'output_csv_name': output_csv_name,
-                        'output_filename': self._get_output_filename(now_utc),
-                        'now_utc': now_utc,
-                        'all_violations': all_violations,
-                        'resource_counts': resource_counts,
-                        'violation_errors': violation_errors
-                    }
-                    message = {
-                        'status': 'scanner_done',
-                        'payload': payload
-                    }
-                    notifier.process(message)
+        all_violations = self._flatten_violations(all_violations)
+        self._output_results_to_db(all_violations)
 
     def _find_violations(self, policies):
         """Find violations in the policies.
 
         Args:
-            policies (list): The list of (gcp_type, forseti_data_model_resource)
-                tuples to find violations in.
+            policies (list): list of (parent resource, iam_policy resource,
+                policy bindings) tuples to find violations in.
 
         Returns:
             list: A list of all violations
         """
         all_violations = []
         LOGGER.info('Finding IAM policy violations...')
-        for (resource, policy) in policies:
+        for (resource, policy, policy_bindings) in policies:
             # At this point, the variable's meanings are switched:
             # "policy" is really the resource from the data model.
             # "resource" is the generated Forseti gcp type.
             LOGGER.debug('%s => %s', resource, policy)
             violations = self.rules_engine.find_policy_violations(
-                resource, policy)
+                resource, policy, policy_bindings)
             all_violations.extend(violations)
         return all_violations
 
@@ -184,38 +191,51 @@ class IamPolicyScanner(base_scanner.BaseScanner):
         with scoped_session as session:
 
             policy_data = []
-            supported_iam_types = ['organization', 'folder', 'project']
+            supported_iam_types = [
+                'organization', 'folder', 'project', 'bucket']
             org_iam_policy_counter = 0
             folder_iam_policy_counter = 0
             project_iam_policy_counter = 0
+            bucket_iam_policy_counter = 0
 
             for policy in data_access.scanner_iter(session, 'iam_policy'):
                 if policy.parent.type not in supported_iam_types:
                     continue
 
+                policy_bindings = filter(None, [  # pylint: disable=bad-builtin
+                    iam_policy.IamPolicyBinding.create_from(b)
+                    for b in json.loads(policy.data).get('bindings', [])])
+
+                if policy.parent.type == 'bucket':
+                    bucket_iam_policy_counter += 1
+                    policy_data.append(
+                        (Bucket(policy.parent.name,
+                                policy.parent.full_name,
+                                policy.data),
+                         policy, policy_bindings))
                 if policy.parent.type == 'project':
                     project_iam_policy_counter += 1
                     policy_data.append(
                         (Project(policy.parent.name,
-                                 policy.full_name,
+                                 policy.parent.full_name,
                                  policy.data),
-                         policy))
+                         policy, policy_bindings))
                 elif policy.parent.type == 'folder':
                     folder_iam_policy_counter += 1
                     policy_data.append(
                         (Folder(
                             policy.parent.name,
-                            policy.full_name,
+                            policy.parent.full_name,
                             policy.data),
-                         policy))
+                         policy, policy_bindings))
                 elif policy.parent.type == 'organization':
                     org_iam_policy_counter += 1
                     policy_data.append(
                         (Organization(
                             policy.parent.name,
-                            policy.full_name,
+                            policy.parent.full_name,
                             policy.data),
-                         policy))
+                         policy, policy_bindings))
 
         if not policy_data:
             LOGGER.warn('No policies found. Exiting.')
@@ -225,6 +245,7 @@ class IamPolicyScanner(base_scanner.BaseScanner):
             ResourceType.ORGANIZATION: org_iam_policy_counter,
             ResourceType.FOLDER: folder_iam_policy_counter,
             ResourceType.PROJECT: project_iam_policy_counter,
+            ResourceType.BUCKET: bucket_iam_policy_counter,
         }
 
         return policy_data, resource_counts
@@ -232,6 +253,7 @@ class IamPolicyScanner(base_scanner.BaseScanner):
     def run(self):
         """Runs the data collection."""
 
-        policy_data, resource_counts = self._retrieve()
+        policy_data, _ = self._retrieve()
+        _add_bucket_ancestor_bindings(policy_data)
         all_violations = self._find_violations(policy_data)
-        self._output_results(all_violations, resource_counts)
+        self._output_results(all_violations)

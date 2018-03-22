@@ -15,12 +15,12 @@
 """Util for generic operations for Resources."""
 
 from google.cloud.forseti.common.gcp_type import backend_service
+from google.cloud.forseti.common.gcp_type import bucket
 from google.cloud.forseti.common.gcp_type import folder
 from google.cloud.forseti.common.gcp_type import organization as org
 from google.cloud.forseti.common.gcp_type import project
 from google.cloud.forseti.common.gcp_type import resource
 from google.cloud.forseti.services import utils
-
 
 _RESOURCE_TYPE_MAP = {
     resource.ResourceType.ORGANIZATION: {
@@ -38,12 +38,18 @@ _RESOURCE_TYPE_MAP = {
         'plural': 'Projects',
         'can_create_resource': True,
     },
+    resource.ResourceType.BUCKET: {
+        'class': bucket.Bucket,
+        'plural': 'Buckets',
+        'can_create_resource': True,
+    },
     resource.ResourceType.BACKEND_SERVICE: {
         'class': backend_service.BackendService,
         'plural': 'Backend Services',
         'can_create_resource': False,
     },
 }
+
 
 def create_resource(resource_id, resource_type, **kwargs):
     """Factory to create a certain kind of Resource.
@@ -66,6 +72,7 @@ def create_resource(resource_id, resource_type, **kwargs):
     return resource_type.get('class')(
         resource_id, **kwargs)
 
+
 def get_ancestors_from_full_name(full_name):
     """Creates a Resource for each resource in the full ancestory path.
 
@@ -82,6 +89,7 @@ def get_ancestors_from_full_name(full_name):
         resource_ancestors.append(create_resource(resource_id, resource_type))
     return resource_ancestors
 
+
 def pluralize(resource_type):
     """Determine the pluralized form of the resource type.
 
@@ -96,6 +104,7 @@ def pluralize(resource_type):
         return None
 
     return _RESOURCE_TYPE_MAP.get(resource_type).get('plural')
+
 
 def type_from_name(resource_name):
     """Determine resource type from resource name.

@@ -14,10 +14,7 @@
 
 """Scanner for the Identity-Aware Proxy rules engine."""
 import collections
-from datetime import datetime
-import os
 
-from google.cloud.forseti.common.data_access import csv_writer
 from google.cloud.forseti.common.gcp_type import (
     backend_service as backend_service_type)
 from google.cloud.forseti.common.gcp_type import (
@@ -32,19 +29,17 @@ from google.cloud.forseti.common.gcp_type import (
 from google.cloud.forseti.common.gcp_type import network as network_type
 from google.cloud.forseti.common.gcp_type.resource import ResourceType
 from google.cloud.forseti.common.util import logger
-from google.cloud.forseti.notifier import notifier
 from google.cloud.forseti.scanner.audit import iap_rules_engine
 from google.cloud.forseti.scanner.scanners import base_scanner
 
 LOGGER = logger.get_logger(__name__)
 IapResource = collections.namedtuple(
-    'IapResource',
-    ['project_full_name',
-     'backend_service',
-     'alternate_services',
-     'direct_access_sources',
-     'iap_enabled',
-    ])
+    'IapResource', ['project_full_name',
+                    'backend_service',
+                    'alternate_services',
+                    'direct_access_sources',
+                    'iap_enabled']
+)
 NetworkPort = collections.namedtuple(
     'NetworkPort',
     ['network', 'port'])
@@ -189,8 +184,7 @@ class _RunData(object):
                 else:
                     fw_port_min = int(fw_port_range)
                     fw_port_max = int(fw_port_range)
-                if (network_port.port >= fw_port_min and
-                        network_port.port <= fw_port_max):
+                if fw_port_min <= network_port.port <= fw_port_max:
                     return True
             return False
 
@@ -400,15 +394,12 @@ class IapScanner(base_scanner.BaseScanner):
             direct_access_sources.sort()
             direct_access_str = ', '.join(direct_access_sources)
 
-            violation_data = {}
-            violation_data['alternate_services_violations'] = (
-                alternate_services_str)
-            violation_data['direct_access_sources_violations'] = (
-                direct_access_str)
-            violation_data['iap_enabled_violation'] = (
-                str(violation.iap_enabled_violation))
-            violation_data['resource_name'] = (
-                violation.resource_name)
+            violation_data = {
+                'alternate_services_violations': alternate_services_str,
+                'direct_access_sources_violations': direct_access_str,
+                'iap_enabled_violation': str(violation.iap_enabled_violation),
+                'resource_name': violation.resource_name
+            }
 
             yield {
                 'resource_id': violation.resource_id,
@@ -421,69 +412,14 @@ class IapScanner(base_scanner.BaseScanner):
                 'inventory_data': violation.inventory_data
             }
 
-    def _output_results(self, all_violations, resource_counts):
+    def _output_results(self, all_violations):
         """Output results.
 
         Args:
-            all_violations (list): A list of violations
-            resource_counts (dict): Resource count map.
+            all_violations (list): A list of violations.
         """
-        resource_name = 'violations'
-
-        all_violations = list(self._flatten_violations(all_violations))
-        LOGGER.debug('Writing violations: %r', all_violations)
-        violation_errors = self._output_results_to_db(all_violations)
-
-        # Write the CSV for all the violations.
-        # TODO: Move this into base class? It's cargo-culted from the IAM
-        # scanner.
-        LOGGER.debug('output_path: %r',
-                     self.scanner_configs.get('output_path'))
-        if self.scanner_configs.get('output_path'):
-            LOGGER.info('Writing violations to csv...')
-            output_csv_name = None
-            with csv_writer.write_csv(
-                resource_name=resource_name,
-                data=all_violations,
-                write_header=True) as csv_file:
-                output_csv_name = csv_file.name
-                LOGGER.info('CSV filename: %s', output_csv_name)
-
-                # Scanner timestamp for output file and email.
-                now_utc = datetime.utcnow()
-
-                output_path = self.scanner_configs.get('output_path')
-                if not output_path.startswith('gs://'):
-                    if not os.path.exists(
-                            self.scanner_configs.get('output_path')):
-                        os.makedirs(output_path)
-                    output_path = os.path.abspath(output_path)
-                self._upload_csv(output_path, now_utc, output_csv_name)
-
-                # Send summary email.
-                # TODO: Untangle this email by looking for the csv content
-                # from the saved copy.
-                if self.global_configs.get('email_recipient') is not None:
-                    payload = {
-                        'email_description': 'IAP Scan',
-                        'email_sender':
-                            self.global_configs.get('email_sender'),
-                        'email_recipient':
-                            self.global_configs.get('email_recipient'),
-                        'sendgrid_api_key':
-                            self.global_configs.get('sendgrid_api_key'),
-                        'output_csv_name': output_csv_name,
-                        'output_filename': self._get_output_filename(now_utc),
-                        'now_utc': now_utc,
-                        'all_violations': all_violations,
-                        'resource_counts': resource_counts,
-                        'violation_errors': violation_errors
-                    }
-                    message = {
-                        'status': 'scanner_done',
-                        'payload': payload
-                    }
-                    notifier.process(message)
+        all_violations = self._flatten_violations(all_violations)
+        self._output_results_to_db(all_violations)
 
     def _get_backend_services(self, parent_type_name):
         """Retrieves backend services.
@@ -670,5 +606,5 @@ class IapScanner(base_scanner.BaseScanner):
 
         LOGGER.debug('In run')
         iap_data = self._retrieve()
-        all_violations, resource_counts = self._find_violations(iap_data)
-        self._output_results(all_violations, resource_counts)
+        all_violations, _ = self._find_violations(iap_data)
+        self._output_results(all_violations)

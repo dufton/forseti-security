@@ -21,6 +21,7 @@ from StringIO import StringIO
 import traceback
 import json
 
+from google.cloud.forseti.services.utils import get_key_from_type_name
 from google.cloud.forseti.services.utils import get_sql_dialect
 from google.cloud.forseti.services.utils import to_full_resource_name
 from google.cloud.forseti.services.utils import to_type_name
@@ -29,6 +30,7 @@ from google.cloud.forseti.services.inventory.storage import Storage as Inventory
 
 class ResourceCache(dict):
     """Resource cache."""
+
     def __setitem__(self, key, value):
         """Overriding to assert the keys does not exist previously.
 
@@ -70,7 +72,7 @@ class EmptyImporter(object):
         self.session.add(self.model)
         self.model.add_description(
             json.dumps(
-                {'source':'empty', 'pristine':True}
+                {'source': 'empty', 'pristine': True}
             )
         )
         self.model.set_done()
@@ -92,7 +94,7 @@ class InventoryImporter(object):
 
         Args:
             session (object): Database session.
-            model (str): Model name to create.
+            model (Model): Model object.
             dao (object): Data Access Object from dao.py
             service_config (ServiceConfig): Service configuration.
             inventory_id (str): Inventory id to import from
@@ -121,7 +123,7 @@ class InventoryImporter(object):
 
         Raises:
             NotImplementedError: If the importer encounters an unknown
-                                 inventory type.
+                inventory type.
         """
 
         gcp_type_list = [
@@ -150,17 +152,17 @@ class InventoryImporter(object):
             'subnetwork',
             'cloudsqlinstance',
             'kubernetes_cluster',
-            ]
+        ]
 
         gsuite_type_list = [
             'gsuite_group',
             'gsuite_user',
-            ]
+        ]
 
         member_type_list = [
             'gsuite_user_member',
             'gsuite_group_member',
-            ]
+        ]
 
         autoflush = self.session.autoflush
         try:
@@ -176,7 +178,7 @@ class InventoryImporter(object):
                     'pristine': True,
                     'gsuite_enabled': inventory.type_exists(
                         ['gsuite_group', 'gsuite_user'])
-                    }))
+                }))
 
                 if root.get_type() in ['organization']:
                     self.found_root = True
@@ -349,7 +351,6 @@ class InventoryImporter(object):
 
         # Store all members which are mentioned in policies
         # that were not previously in groups or gsuite users.
-        self.session.add_all(self.member_cache_policies.values())
         self.session.flush()
 
     def _store_iam_policy(self, policy):
@@ -370,7 +371,7 @@ class InventoryImporter(object):
                 self.model.add_warning(msg)
                 continue
 
-            #binding['members'] can have duplicate ids
+            # binding['members'] can have duplicate ids
             members = set(binding['members'])
             for member in members:
                 member = member.replace(':', '/', 1)
@@ -378,7 +379,7 @@ class InventoryImporter(object):
                 # We still might hit external users or groups
                 # that we haven't seen in gsuite.
                 if member not in self.member_cache and \
-                   member not in self.member_cache_policies:
+                        member not in self.member_cache_policies:
                     try:
                         # This is the default case, e.g. 'group/foobar'
                         m_type, name = member.split('/', 1)
@@ -414,9 +415,9 @@ class InventoryImporter(object):
 
         Args:
             resource (object): Resource object to convert from.
-            last_res_type (str): Previsouly processed resource type
-                                 used to spot transition between types
-                                 to execute pre/handler/post accordingly.
+            last_res_type (str): Previously processed resource type used to
+                spot transition between types to execute pre/handler/post
+                accordingly.
 
         Returns:
             str: Resource type that was processed during the execution.
@@ -502,7 +503,7 @@ class InventoryImporter(object):
                                    self._convert_kubernetes_cluster,
                                    None),
             None: (None, None, None),
-            }
+        }
 
         res_type = resource.get_type() if resource else None
         if res_type not in handlers:
@@ -653,6 +654,7 @@ class InventoryImporter(object):
 
     def _convert_computeproject(self, computeproject):
         """Convert a computeproject to a database object.
+
         Args:
             computeproject (object): computeproject to store.
         """
@@ -679,7 +681,7 @@ class InventoryImporter(object):
         parent, full_res_name = self._get_parent(iam_policy)
         iam_policy_type_name = to_type_name(
             iam_policy.get_type_class(),
-            parent.type_name)
+            ':'.join(parent.type_name.split('/')))
         iam_policy_full_res_name = to_full_resource_name(
             full_res_name,
             iam_policy_type_name)
@@ -901,6 +903,11 @@ class InventoryImporter(object):
         data = cloudsqlinstance.get_data()
         parent, full_res_name, type_name = self._full_resource_name(
             cloudsqlinstance)
+        parent_key = get_key_from_type_name(parent.type_name)
+        resource_identifier = '{}:{}'.format(parent_key,
+                                             cloudsqlinstance.get_key())
+        type_name = to_type_name(cloudsqlinstance.get_type(),
+                                 resource_identifier)
         self.session.add(
             self.dao.TBL_RESOURCE(
                 full_name=full_res_name,
@@ -918,7 +925,6 @@ class InventoryImporter(object):
         Args:
             service_account (object): Service account to store.
         """
-
         data = service_account.get_data()
         parent, full_res_name, type_name = self._full_resource_name(
             service_account)
@@ -1115,7 +1121,6 @@ class InventoryImporter(object):
         Returns:
             str: type/name representation of the resource.
         """
-
         return to_type_name(
             resource.get_type(),
             resource.get_key())

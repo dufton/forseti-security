@@ -14,6 +14,7 @@
 
 """ Unit Tests for Scanner DAO. """
 
+from datetime import datetime
 import hashlib
 
 from itertools import izip
@@ -24,7 +25,6 @@ import unittest
 from google.cloud.forseti.services.scanner import dao as scanner_dao
 from tests.unittest_utils import ForsetiTestCase
 from tests.services.util.db import create_test_engine
-
 
 FAKE_INVENTORY_INDEX_ID = 'aaa'
 FAKE_VIOLATION_HASH = (u'111111111111111111111111111111111111111111111111111111'
@@ -60,7 +60,14 @@ FAKE_EXPECTED_VIOLATIONS = [
      }
 ]
 
-
+def populate_db():
+    """Populate the db with violations."""
+    engine = create_test_engine()
+    violation_access_cls = scanner_dao.define_violation(engine)
+    violation_access = violation_access_cls(engine)
+    violation_access.create(FAKE_EXPECTED_VIOLATIONS,
+                            FAKE_INVENTORY_INDEX_ID)
+    return violation_access 
 
 class ScannerDaoTest(ForsetiTestCase):
     """Test scanner data access."""
@@ -81,24 +88,19 @@ class ScannerDaoTest(ForsetiTestCase):
 
     def test_save_violations(self):
         """Test violations can be saved."""
-        engine = create_test_engine()
-        violation_access_cls = scanner_dao.define_violation(engine)
-        violation_access = violation_access_cls(engine)
-
-        violation_access.create(FAKE_EXPECTED_VIOLATIONS,
-                                FAKE_INVENTORY_INDEX_ID)
-        saved_violations = violation_access.list()
+        saved_violations = populate_db().list()
 
         expected_hash_values = [
-          (u'fbe237bd0c7bdfcd14379fbe3c156fc6651166cd06639577bd7f86df4d78c9f34a'
-            '62f60e09022e34d7c9ee82ab0de1b7091a7e1d550492b6fd54d8ab1a75cd8e'),
-          (u'e40431f9617ff70f07f93cb2440121a5a3e9c39ec9bbfbaae529feb310a8acaae9'
-             '42a61443145d9d6773f72be90ff8ac2518e63b1face15ce8895a9c571cf642')
+          (u'539cfbdb1113a74ec18edf583eada77ab1a60542c6edcb4120b50f34629b6b6904'
+            '1c13f0447ab7b2526d4c944c88670b6f151fa88444c30771f47a3b813552ff'),
+          (u'3eff279ccb96799d9eb18e6b76055b2242d1f2e6f14c1fb3bb48f7c8c03b4ce4db'
+            '577d67c0b91c5914902d906bf1703d5bbba0ceaf29809ac90fef3bf6aa5417')
         ]
 
         keys = ['inventory_index_id', 'resource_id', 'full_name',
                 'resource_type', 'rule_name', 'rule_index', 'violation_type',
-                'violation_data', 'violation_hash', 'inventory_data']
+                'violation_data', 'violation_hash', 'inventory_data',
+                'created_at_datetime']
 
         for fake, saved in izip(FAKE_EXPECTED_VIOLATIONS, saved_violations):
             for key in keys:
@@ -119,6 +121,13 @@ class ScannerDaoTest(ForsetiTestCase):
                         '\nFound: %s' % (key, ',\n'.join(expected_hash_values),
                                          saved_key_value)
                     )
+                elif key == 'created_at_datetime':
+                    self.assertIsInstance(
+                        saved_key_value, datetime,
+                        'The key value of "%s" differs:\n Expected type: %s'
+                        '\nFound type: %s' % (key, type(datetime),
+                                              type(saved_key_value))
+                    )
                 else:
                     self.assertEquals(
                         expected_key_value, saved_key_value,
@@ -131,13 +140,8 @@ class ScannerDaoTest(ForsetiTestCase):
     def test_convert_sqlalchemy_object_to_dict(self, mock_violation_hash):
         mock_violation_hash.side_effect = [FAKE_VIOLATION_HASH,
                                            FAKE_VIOLATION_HASH]
-        engine = create_test_engine()
-        violation_access_cls = scanner_dao.define_violation(engine)
-        violation_access = violation_access_cls(engine)
+        saved_violations = populate_db().list()
 
-        violation_access.create(FAKE_EXPECTED_VIOLATIONS,
-                                FAKE_INVENTORY_INDEX_ID)
-        saved_violations = violation_access.list()
 
         converted_violations_as_dict = []
         for violation in saved_violations:
@@ -171,6 +175,11 @@ class ScannerDaoTest(ForsetiTestCase):
             }
         ]
 
+        # It's useless testing 'created_at_datetime' as we can't mock datetime
+        # and we only care about its type and not its value.
+        for violation in converted_violations_as_dict:
+            del violation['created_at_datetime']
+
         self.assertEqual(expected_violations_as_dict,
                          converted_violations_as_dict)
 
@@ -181,8 +190,8 @@ class ScannerDaoTest(ForsetiTestCase):
         """ Test _create_violation_hash. """
         test_hash = hashlib.new('sha512')
         test_hash.update(
-            self.test_violation_full_name +
-            self.test_inventory_data +
+            json.dumps(self.test_violation_full_name) +
+            json.dumps(self.test_inventory_data) +
             json.dumps(self.test_violation_data)
         )
         expected_hash = test_hash.hexdigest()
@@ -221,6 +230,21 @@ class ScannerDaoTest(ForsetiTestCase):
 
         self.assertEqual(expected_hash, returned_hash)
 
+    def test_create_violation_hash_with_inventory_data_not_string(self):
+        expected_hash = 'fc59c859e9a088d14627f363d629142920225c8b1ea40f2df8b450ff7296c3ad99addd6a1ab31b5b8ffb250e1f25f2a8a6ecf2068afd5f0c46bc2d810f720b9a'
+        returned_hash = scanner_dao._create_violation_hash(
+            self.test_violation_full_name,
+            ['aaa', 'bbb', 'ccc'],
+            self.test_violation_data)                                                  
+        self.assertEquals(expected_hash, returned_hash)
+
+    def test_create_violation_hash_with_full_name_not_string(self):
+        expected_hash = 'f8813c34ab225002fb2c04ee392691b4e37c9a0eee1a08b277c36b7bb0309f9150a88231dbd3f4ec5e908a5a39a8e38515b8e532d509aa3220e71ab4844a0284'
+        returned_hash = scanner_dao._create_violation_hash(
+            None,
+            self.test_inventory_data,
+            self.test_violation_data)                                                  
+        self.assertEquals(expected_hash, returned_hash)
 
 if __name__ == '__main__':
     unittest.main()

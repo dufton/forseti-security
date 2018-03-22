@@ -15,7 +15,6 @@
 """Scanner for the Networks Enforcer acls rules engine."""
 
 # pylint: disable=line-too-long
-from google.cloud.forseti.common.data_access import project_dao
 from google.cloud.forseti.common.gcp_type.instance import Instance
 from google.cloud.forseti.common.util import logger
 from google.cloud.forseti.common.gcp_type.resource import ResourceType
@@ -66,12 +65,10 @@ class InstanceNetworkInterfaceScanner(base_scanner.BaseScanner):
             dict: Iterator of RuleViolations as a dict per member.
         """
         for violation in violations:
-            violation_data = {}
-            violation_data['project'] = violation.project
-            violation_data['full_name'] = violation.full_name
-            violation_data['network'] = violation.network
-            violation_data['ip'] = violation.ip
-            violation_data['inventory_data'] = violation.inventory_data
+            violation_data = {'project': violation.project,
+                              'full_name': violation.full_name,
+                              'network': violation.network, 'ip': violation.ip,
+                              'inventory_data': violation.inventory_data}
             yield {
                 'resource_id': violation.resource_id,
                 'resource_type': violation.resource_type,
@@ -91,21 +88,6 @@ class InstanceNetworkInterfaceScanner(base_scanner.BaseScanner):
         """
         all_violations = self._flatten_violations(all_violations)
         self._output_results_to_db(all_violations)
-
-    def _get_project_policies(self):
-        """Get projects from data source.
-
-        Returns:
-            dict: project policies
-        """
-        project_policies = {}
-        project_policies = (
-            project_dao
-            .ProjectDao(self.global_configs)
-            .get_project_policies('projects',
-                                  self.
-                                  snapshot_timestamp))
-        return project_policies
 
     @staticmethod
     def _get_resource_count(project_policies, instance_network_interfaces):

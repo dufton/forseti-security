@@ -17,13 +17,18 @@ import os
 import shutil
 import tempfile
 import unittest
-import json
+
+from datetime import datetime
+
 from tests.unittest_utils import ForsetiTestCase
+from google.cloud.forseti.common.util import string_formats
 from google.cloud.forseti.services.dao import create_engine
 from google.cloud.forseti.services.dao import ModelManager
 from google.cloud.forseti.services.model.importer import importer
-from google.cloud.forseti.services.inventory.storage import Storage as Inventory
-FAKE_TIMESTAMP = '2018-01-28T10:20:30.00000'
+
+FAKE_DATETIME = datetime(2018, 1, 28, 10, 20, 30, 0)
+FAKE_DATETIME_TIMESTAMP = FAKE_DATETIME.strftime(
+    string_formats.TIMESTAMP_MICROS)
 
 
 class ServiceConfig(object):
@@ -82,8 +87,14 @@ class ImporterTest(ForsetiTestCase):
                                          session=session),
                 data_access,
                 self.service_config,
-                inventory_id=FAKE_TIMESTAMP)
+                inventory_id=FAKE_DATETIME_TIMESTAMP)
             import_runner.run()
+
+            # Make sure the 'full_name' for policies has an even number of
+            # segments.
+            for policy in data_access.scanner_iter(session, 'iam_policy'):
+                self.assertFalse(
+                        len(filter(None, policy.full_name.split('/'))) % 2)
 
         model = self.model_manager.model(self.model_name)
         model_description = self.model_manager.get_description(self.model_name)
@@ -95,20 +106,12 @@ class ImporterTest(ForsetiTestCase):
         self.assertEquals(
             {'pristine': True,
              'source': 'inventory',
-             'source_info': {'inventory_index_id': FAKE_TIMESTAMP},
+             'source_info': {'inventory_index_id': FAKE_DATETIME_TIMESTAMP},
              'source_root': 'organization/111222333',
              'gsuite_enabled': True
              },
             model_description)
-        #{
-        #    "pristine": true,
-        #    "source": "inventory",
-        #    "source_info": {
-        #        "inventory_index_id": "2018-02-02T01:47:39.16075"
-        #    },
-        #    "source_root": "organization/111222333",
-        #    "gsuite_enabled": True
-        #}
+
 
 if __name__ == '__main__':
     unittest.main()

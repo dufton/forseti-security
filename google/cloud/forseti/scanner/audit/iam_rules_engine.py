@@ -20,7 +20,6 @@ determine whether there are violations.
 """
 
 import itertools
-import json
 import threading
 
 from google.cloud.forseti.common.gcp_type import errors as resource_errors
@@ -32,7 +31,6 @@ from google.cloud.forseti.common.util import relationship
 from google.cloud.forseti.scanner.audit import base_rules_engine as bre
 from google.cloud.forseti.scanner.audit import rules as scanner_rules
 from google.cloud.forseti.scanner.audit import errors as audit_errors
-
 
 LOGGER = logger.get_logger(__name__)
 
@@ -57,6 +55,7 @@ def _check_whitelist_members(rule_members=None, policy_members=None):
             violating_members.append(policy_member)
     return violating_members
 
+
 def _check_blacklist_members(rule_members=None, policy_members=None):
     """Blacklist: Check that policy members ARE NOT in rule members.
 
@@ -77,6 +76,7 @@ def _check_blacklist_members(rule_members=None, policy_members=None):
         if rule_member.matches(policy_member)
     ]
     return violating_members
+
 
 def _check_required_members(rule_members=None, policy_members=None):
     """Required: Check that rule members are in policy members.
@@ -127,14 +127,15 @@ class IamRulesEngine(bre.BaseRulesEngine):
             self._load_rule_definitions(),
             snapshot_timestamp=self.snapshot_timestamp)
 
-    def find_policy_violations(self, resource, policy, force_rebuild=False):
+    def find_policy_violations(
+            self, resource, policy, policy_bindings, force_rebuild=False):
         """Determine whether policy violates rules.
 
         Args:
             resource (gcp_type): The resource that the policy belongs to.
-            policy (forseti_data_model_resource): The policy to compare
-                against the rules.
+            policy (resource): The policy to compare against the rules.
                 See https://cloud.google.com/iam/reference/rest/v1/Policy.
+            policy_bindings (list): list of bindings found in `policy.data`
             force_rebuild (bool): If True, rebuilds the rule book.
                 This will reload the rules definition file and add the
                 rules to the book.
@@ -145,9 +146,6 @@ class IamRulesEngine(bre.BaseRulesEngine):
         if self.rule_book is None or force_rebuild:
             self.build_rule_book()
 
-        policy_bindings = [
-            iam_policy.IamPolicyBinding.create_from(b)
-            for b in json.loads(policy.data).get('bindings', [])]
         violations = self.rule_book.find_violations(
             resource, policy, policy_bindings)
 
@@ -198,7 +196,7 @@ class IamRuleBook(bre.BaseRuleBook):
     def __init__(self,
                  # TODO: To remove the unused global-configs here, it will be
                  # necessary to also update the base rules engine.
-                 global_configs,  #pylint: disable= unused-argument
+                 global_configs,  # pylint: disable= unused-argument
                  rule_defs=None,
                  snapshot_timestamp=None):
         """Initialize.
@@ -336,9 +334,13 @@ class IamRuleBook(bre.BaseRuleBook):
                         resource_id=resource_id,
                         resource_type=resource_type)
 
-                    rule_bindings = [
-                        iam_policy.IamPolicyBinding.create_from(b)
-                        for b in rule_def.get('bindings')]
+                    # TODO: Rewrite this as a list comprehension.
+                    # pylint: disable=bad-builtin
+                    rule_bindings = filter(
+                        None,
+                        [iam_policy.IamPolicyBinding.create_from(b) for b in
+                         rule_def.get('bindings')]
+                    )
                     rule = scanner_rules.Rule(rule_name=rule_def.get('name'),
                                               rule_index=rule_index,
                                               bindings=rule_bindings,
@@ -456,17 +458,14 @@ class IamRuleBook(bre.BaseRuleBook):
         Returns:
             bool: True if rule applies to the resource, otherwise false.
         """
-        applies_to_self = (
-            resource_rule.applies_to ==
-            scanner_rules.RuleAppliesTo.SELF and
-            resource == curr_resource)
-        applies_to_children = (
-            resource_rule.applies_to ==
-            scanner_rules.RuleAppliesTo.CHILDREN and
-            resource != curr_resource)
-        applies_to_both = (
-            resource_rule.applies_to ==
-            scanner_rules.RuleAppliesTo.SELF_AND_CHILDREN)
+        applies_to_self = (resource_rule.applies_to ==
+                           scanner_rules.RuleAppliesTo.SELF and
+                           resource == curr_resource)
+        applies_to_children = (resource_rule.applies_to ==
+                               scanner_rules.RuleAppliesTo.CHILDREN and
+                               resource != curr_resource)
+        applies_to_both = (resource_rule.applies_to ==
+                           scanner_rules.RuleAppliesTo.SELF_AND_CHILDREN)
 
         return applies_to_self or applies_to_children or applies_to_both
 
@@ -537,7 +536,9 @@ class ResourceRules(object):
         """
         return ('ResourceRules<resource={}, rules={}, '
                 'applies_to={}, inherit_from_parents={}>').format(
-                    self.resource, self.rules, self.applies_to,
+                    self.resource,
+                    self.rules,
+                    self.applies_to,
                     self.inherit_from_parents)
 
     def find_mismatches(self, resource, policy_bindings):

@@ -92,6 +92,10 @@ class IamPolicyTest(ForsetiTestCase):
             'user:not-user@company.com'))
         self.assertFalse(iam_policy_members[2].matches(
             'user:anyone@not.company.com'))
+        self.assertFalse(iam_policy_members[2].matches(
+            'user:anyone@notmycompany.com'))
+        self.assertFalse(iam_policy_members[2].matches(
+            'user:anyone@mycompany.com.notmycompany.com'))
         self.assertFalse(iam_policy_members[3].matches(
             'serviceAccount:someone@gserviceaccount.com'))
         self.assertFalse(iam_policy_members[3].matches(
@@ -123,7 +127,7 @@ class IamPolicyTest(ForsetiTestCase):
             'members': self.test_members
         }
         iam_binding2 = IamPolicyBinding.create_from(binding2)
-        self.assertEqual('^roles\/.+$', iam_binding2.role_pattern.pattern)
+        self.assertEqual('^roles\/.+?$', iam_binding2.role_pattern.pattern)
 
     def test_binding_missing_role_raises(self):
         """Test that a binding with no role raises an exception."""
@@ -134,6 +138,117 @@ class IamPolicyTest(ForsetiTestCase):
         """Test that a binding with no members raises an exception."""
         with self.assertRaises(InvalidIamPolicyBindingError):
             IamPolicyBinding('roles/fake', [])
+
+    def test_binding_merge_members_other_type_different_raises(self):
+        """Test that merging raises exception if `other`is not of same type."""
+        with self.assertRaises(InvalidIamPolicyBindingError):
+            binding = {
+                'role': 'roles/viewer',
+                'members': [
+                    'user:test-user@company.com',
+                    'serviceAccount:abc@def.gserviceaccount.com',
+                ]
+            }
+            iam_binding = IamPolicyBinding.create_from(binding)
+            iam_binding.merge_members([1, 2, 4])
+
+    def test_binding_merge_members_same_role_and_members(self):
+        binding = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        iam_binding1 = IamPolicyBinding.create_from(binding)
+        iam_binding2 = IamPolicyBinding.create_from(binding)
+        iam_binding1.merge_members(iam_binding2)
+        self.assertEqual(iam_binding1, iam_binding2)
+
+    def test_binding_merge_members_same_role_different_members(self):
+        binding1 = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        binding2 = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:xxx@company.com',
+            ]
+        }
+        expected_binding = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+                'user:xxx@company.com',
+            ]
+        }
+        iam_binding1 = IamPolicyBinding.create_from(binding1)
+        iam_binding2 = IamPolicyBinding.create_from(binding2)
+        iam_binding1.merge_members(iam_binding2)
+        expected_binding = IamPolicyBinding.create_from(expected_binding)
+        self.assertEqual(expected_binding, iam_binding1)
+
+    def test_binding_merge_members_same_role_mixed_members(self):
+        binding1 = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        binding2 = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:xxx@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        expected_binding = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+                'user:xxx@company.com',
+            ]
+        }
+        iam_binding1 = IamPolicyBinding.create_from(binding1)
+        iam_binding2 = IamPolicyBinding.create_from(binding2)
+        iam_binding1.merge_members(iam_binding2)
+        expected_binding = IamPolicyBinding.create_from(expected_binding)
+        self.assertEqual(expected_binding, iam_binding1)
+
+    def test_binding_merge_members_different_role(self):
+        """Original binding remains same if other's role is different."""
+        binding1 = {
+            'role': 'roles/owner',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        binding2 = {
+            'role': 'roles/viewer',
+            'members': [
+                'user:xxx@company.com',
+            ]
+        }
+        expected_binding = {
+            'role': 'roles/owner',
+            'members': [
+                'user:test-user@company.com',
+                'serviceAccount:abc@def.gserviceaccount.com',
+            ]
+        }
+        iam_binding1 = IamPolicyBinding.create_from(binding1)
+        iam_binding2 = IamPolicyBinding.create_from(binding2)
+        iam_binding1.merge_members(iam_binding2)
+        expected_binding = IamPolicyBinding.create_from(expected_binding)
+        self.assertEqual(expected_binding, iam_binding1)
 
     # Test IamPolicy
     def test_policy_create_from_is_correct(self):
