@@ -47,8 +47,12 @@ def GenerateConfig(context):
 
     resources = []
 
+    deployment_name_splitted = context.env['deployment'].split('-')
+    deployment_name_splitted.insert(len(deployment_name_splitted)-1, 'vm')
+    instance_name = '-'.join(deployment_name_splitted)
+
     resources.append({
-        'name': '{}-vm'.format(context.env['deployment']),
+        'name':  instance_name,
         'type': 'compute.v1.instance',
         'properties': {
             'zone': context.properties['zone'],
@@ -135,7 +139,9 @@ chown -R $USER {forseti_home}
 # Export variables
 {persist_forseti_vars}
 
-sudo echo "{persist_forseti_vars}" >> $USER_HOME/.bashrc
+# Store the variables in /etc/profile.d/forseti_environment.sh 
+# so all the users will have access to them
+echo "echo '{persist_forseti_vars}' >> /etc/profile.d/forseti_environment.sh" | sudo sh
 
 echo "Execution of startup script finished"
 """.format(

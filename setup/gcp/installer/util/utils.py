@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import subprocess
+import threading
 import time
 
 import constants
@@ -43,17 +44,68 @@ def id_from_name(name):
     return name[name.index('/')+1:]
 
 
-def print_banner(text):
+def print_banner(*args):
     """Print a banner.
 
     Args:
-        text (str): Text to put in the banner.
+        args (str): Text(s) to put in the banner.
     """
+    texts = [arg for arg in args]
+    _print_banner(border_symbol='-',
+                  edge_symbol='|',
+                  corner_symbol='+',
+                  length=80,
+                  wrap_border=False,
+                  texts=texts)
+
+
+def print_installation_header(*args):
+    """Print installation header.
+
+    Installation header will have a different pattern than a normal banner.
+
+    Args:
+        args (str): Text(s) to put in the banner.
+    """
+    texts = [arg for arg in args]
+    _print_banner(border_symbol='#',
+                  edge_symbol='#',
+                  corner_symbol='#',
+                  length=80,
+                  wrap_border=True,
+                  texts=texts)
+
+
+def _print_banner(border_symbol, edge_symbol, corner_symbol,
+                  length, wrap_border, texts):
+    """Print a banner.
+
+    Args:
+        border_symbol (str): The symbol used on the border.
+        edge_symbol (str): The symbol used on the edge.
+        corner_symbol (str): The symbol to put at the corners.
+        length (int): The length of the border.
+        wrap_border (bool): Whether or not we want to wrap around the border.
+        texts (list): Text(s) to put in the banner.
+    """
+    if wrap_border:
+        border = corner_symbol + border_symbol * (length - 2) + corner_symbol
+    else:
+        border = corner_symbol + border_symbol * (length - 1)
+
     print('')
-    print('+-------------------------------------------------------')
-    print('|  %s' % text)
-    print('+-------------------------------------------------------')
+    print(border)
+    for text in texts:
+        text = '  ' + text
+        if wrap_border:
+            # Pad the text with empty space
+            padded_text = text + ' ' * (length - len(text) - 2)
+            print(edge_symbol + padded_text + edge_symbol)
+        else:
+            print(edge_symbol + text)
+    print(border)
     print('')
+
 
 
 def get_forseti_version():
@@ -147,32 +199,38 @@ def format_resource_id(resource_type, resource_id):
     return '%s/%s' % (resource_type, resource_id)
 
 
-def format_service_acct_id(prefix, modifier, timestamp, project_id):
-    """Format the service account ids.
+def generate_service_acct_info(prefix, installation_type,
+                               timestamp, project_id):
+    """Format the service account email and name.
 
     Args:
-        prefix (str): The prefix of the account id
-        modifier (str): Access level of the account
-        timestamp (str): Timestamp of the class
-        project_id (str): Id of the project on GCP
+        prefix (str): The prefix of the account id and account name.
+        installation_type (str): Type of the installation (client/server).
+        timestamp (str): The timestamp.
+        project_id (str): Id of the project on GCP.
 
     Returns:
-        str: Service account id
+        str: Service account email.
+        str: Service account name.
     """
 
-    return full_service_acct_email(
-        constants.SERVICE_ACCT_FMT.format(
-            prefix, modifier, timestamp), project_id)
+    service_account_name = constants.SERVICE_ACCT_NAME_FMT.format(
+        installation_type, prefix, timestamp)
+
+    service_account_email = full_service_acct_email(service_account_name,
+                                                    project_id)
+
+    return service_account_email, service_account_name
 
 
 def infer_version(advanced_mode):
     """Infer the Forseti version, or ask user to input one not listed.
 
     Args:
-        advanced_mode (bool): Whether or not the installer is in advanced mode
+        advanced_mode (bool): Whether or not the installer is in advanced mode.
 
     Returns:
-        str: Selected Forseti branch
+        str: Selected Forseti branch.
     """
     return_code, out, err = run_command(
         ['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
@@ -268,21 +326,41 @@ def extract_timestamp_from_name(instance_name, include_date=False):
     return instance_name.split('-')[-2][8:]
 
 
-def run_command(cmd_args):
+def run_command(cmd_args, number_of_retry=5, timeout_in_second=90):
     """Wrapper to run a command in subprocess.
+
+    If there is a timeout/error on the API call, we will re try up to 5 times
+    by default.
+    Each re try will increment timeout_in_second by 10.
 
     Args:
         cmd_args (list): The list of command arguments.
+        number_of_retry (int): Number of re try.
+        timeout_in_second (int): Timeout in second.
 
     Returns:
         int: The return code. 0 is "ok", anything else is "error".
         str: Output, if command was successful.
         err: Error output, if there was an error.
     """
+
     proc = subprocess.Popen(cmd_args,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE)
+
+    timer = threading.Timer(timeout_in_second, proc.kill)
+
+    timer.start()
     out, err = proc.communicate()
+    timer.cancel()
+
+    if proc.returncode and number_of_retry >= 1:
+        print('Command "{}" failed/timeout, retrying...'.format(
+            ' '.join(cmd_args)))
+        return run_command(cmd_args,
+                           number_of_retry - 1,
+                           timeout_in_second + 10)
+
     return proc.returncode, out, err
 
 
@@ -302,24 +380,35 @@ def sanitize_conf_values(conf_values):
     return conf_values
 
 
-def show_loading(loading_time, message='', max_number_of_dots=15):
-    """Show loading message, append dots to the end of the message up to
-    a certain number of dots and repeat.
+def start_loading(max_loading_time, exit_condition_checker=None,
+                  message='', max_number_of_dots=15):
+    """Start and show the loading message, append dots to the end
+    of the message up to a certain number of dots and repeat.
 
     Args:
-        loading_time (int): Loading time in seconds.
+        max_loading_time (int): Loading time in seconds.
+        exit_condition_checker (func): Exit condition checker, a function that
+         returns boolean, will be called every second to check for the return
+         result.
         message (str): Message to print to stdout.
         max_number_of_dots (int): Maximum number of dots on the line.
+
+    Returns:
+        bool: Status of the loading.
     """
 
     # VT100 control codes, use to remove the last line.
     erase_line = '\x1b[2K'
 
-    for i in range(0, loading_time*2):
+    for i in range(0, max_loading_time*2):
+        if exit_condition_checker and exit_condition_checker():
+            print('done\n')
+            return True
         # Sleep for 0.5 second so that the dots can appear more quickly
         # to be more user friendly.
         time.sleep(0.5)
         dots = '.' * (i % max_number_of_dots)
-        sys.stdout.write('\r{}{}{}'.format(erase_line, message, dots))
+        sys.stdout.write('\r{}{}{} '.format(erase_line, message, dots))
         sys.stdout.flush()
-    print ('Done.\n')
+    print ('time limit reached')
+    return False

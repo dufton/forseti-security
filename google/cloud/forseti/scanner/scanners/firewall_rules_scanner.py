@@ -14,17 +14,12 @@
 """Scanner for the firewall rule engine."""
 
 from collections import defaultdict
-from datetime import datetime
 import json
-import os
 
-from google.cloud.forseti.common.util import logger
-from google.cloud.forseti.notifier import notifier
-
-from google.cloud.forseti.common.data_access import csv_writer
 from google.cloud.forseti.common.gcp_type import firewall_rule
 from google.cloud.forseti.common.gcp_type import resource as resource_type
 from google.cloud.forseti.common.gcp_type import resource_util
+from google.cloud.forseti.common.util import logger
 from google.cloud.forseti.scanner.audit import firewall_rules_engine
 from google.cloud.forseti.scanner.scanners import base_scanner
 
@@ -73,10 +68,9 @@ class FirewallPolicyScanner(base_scanner.BaseScanner):
             dict: Iterator of RuleViolations as a dict per member.
         """
         for violation in violations:
-            violation_data = {}
-            violation_data['policy_names'] = violation.policy_names
-            violation_data['recommended_actions'] = (
-                violation.recommended_actions)
+            violation_data = {'policy_names': violation.policy_names,
+                              'recommended_actions': (
+                                  violation.recommended_actions)}
 
             violation_dict = {
                 'resource_id': violation.resource_id,
@@ -91,67 +85,15 @@ class FirewallPolicyScanner(base_scanner.BaseScanner):
             sorted(violation_dict)
             yield violation_dict
 
-    def _output_results(self, all_violations, resource_counts):
+    def _output_results(self, all_violations):
         """Output results.
 
         Args:
-            all_violations (list): A list of violations
-            resource_counts (int): Resource count.
+            all_violations (list): A list of violations.
         """
-        resource_name = 'violations'
         rule_indices = self.rules_engine.rule_book.rule_indices
-        all_violations = list(self._flatten_violations(all_violations,
-                                                       rule_indices))
-        violation_errors = self._output_results_to_db(all_violations)
-
-        # Write the CSV for all the violations.
-        # TODO: Move this into the base class? The IAP scanner version of this
-        # is a wholesale copy.
-        if self.scanner_configs.get('output_path'):
-            LOGGER.info('Writing violations to csv...')
-            output_csv_name = None
-            with csv_writer.write_csv(
-                resource_name=resource_name,
-                data=all_violations,
-                write_header=True) as csv_file:
-                output_csv_name = csv_file.name
-                LOGGER.info('CSV filename: %s', output_csv_name)
-
-                # Scanner timestamp for output file and email.
-                now_utc = datetime.utcnow()
-
-                output_path = self.scanner_configs.get('output_path')
-                if not output_path.startswith('gs://'):
-                    if not os.path.exists(
-                            self.scanner_configs.get('output_path')):
-                        os.makedirs(output_path)
-                    output_path = os.path.abspath(output_path)
-                self._upload_csv(output_path, now_utc, output_csv_name)
-
-                # Send summary email.
-                # TODO: Untangle this email by looking for the csv content
-                # from the saved copy.
-                if self.global_configs.get('email_recipient') is not None:
-                    payload = {
-                        'email_description': 'Firewall Rules Scan',
-                        'email_sender':
-                            self.global_configs.get('email_sender'),
-                        'email_recipient':
-                            self.global_configs.get('email_recipient'),
-                        'sendgrid_api_key':
-                            self.global_configs.get('sendgrid_api_key'),
-                        'output_csv_name': output_csv_name,
-                        'output_filename': self._get_output_filename(now_utc),
-                        'now_utc': now_utc,
-                        'all_violations': all_violations,
-                        'resource_counts': resource_counts,
-                        'violation_errors': violation_errors
-                    }
-                    message = {
-                        'status': 'scanner_done',
-                        'payload': payload
-                    }
-                    notifier.process(message)
+        all_violations = self._flatten_violations(all_violations, rule_indices)
+        self._output_results_to_db(list(all_violations))
 
     def _find_violations(self, policies):
         """Find violations in the policies.
@@ -207,13 +149,13 @@ class FirewallPolicyScanner(base_scanner.BaseScanner):
             }
 
         resource_counts = {
-            resource_type.ResourceType.FIREWALL_RULE: count+1,
+            resource_type.ResourceType.FIREWALL_RULE: count + 1,
         }
 
         return project_policies, resource_counts
 
     def run(self):
         """Runs the data collection."""
-        policy_data, resource_counts = self._retrieve()
+        policy_data, _ = self._retrieve()
         all_violations = self._find_violations(policy_data)
-        self._output_results(all_violations, resource_counts)
+        self._output_results(all_violations)

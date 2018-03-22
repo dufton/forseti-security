@@ -17,14 +17,19 @@
 from itertools import izip
 import logging
 
-# TODO: The next editor must remove this disable and correct issues.
-# pylint: disable=missing-type-doc,missing-return-type-doc,missing-return-doc
-# pylint: disable=missing-param-doc
+
 # pylint: disable=protected-access
 
 
 def autoclose_stream(f):
-    """Decorator to close gRPC stream."""
+    """Decorator to close gRPC stream.
+
+    Args:
+        f (func): The function to decorate
+
+    Returns:
+        wrapper: wrapper of the decorator
+    """
 
     def wrapper(*args):
         """Wrapper function, checks context state to close stream.
@@ -37,85 +42,188 @@ def autoclose_stream(f):
         """
 
         def closed(context):
-            """Returns true iff the connection is closed."""
+            """Returns true iff the connection is closed.
+
+            Args:
+                context (object): the connection to check
+
+            Returns:
+                bool: whether the connection is closed
+            """
 
             return context._state.client == 'closed'
+
         context = args[-1]
         for result in f(*args):
             yield result
             if closed(context):
                 return
+
     return wrapper
 
 
 def logcall(f, level=logging.CRITICAL):
-    """Call logging decorator."""
+    """Call logging decorator.
+
+    Args:
+        f (func): The function to decorate
+        level (str): the level of logging
+
+    Returns:
+        wrapper: wrapper of the decorator
+    """
 
     def wrapper(*args, **kwargs):
-        """Implements the log wrapper including parameters and result."""
+        """Implements the log wrapper including parameters and result.
+
+        Args:
+            *args: All args provided to the wrapped function.
+            **kwargs: All kwargs provided to the wrapped function.
+
+        Returns:
+            object: the f execution result
+        """
         logging.log(level, 'enter %s(%s)', f.__name__, args)
         result = f(*args, **kwargs)
         logging.log(level, 'exit %s(%s) -> %s', f.__name__, args, result)
         return result
+
     return wrapper
 
 
 def mutual_exclusive(lock):
-    """ Mutex decorator. """
+    """ Mutex decorator.
+
+    Args:
+        lock (object): The lock to lock out exclusive method
+
+    Returns:
+        object: decorator generator
+    """
 
     def wrap(f):
-        """Decorator generator."""
-        def function(*args, **kw):
-            """Decorated functionality, mutexing wrapped function."""
+        """Decorator generator.
+
+        Args:
+            f (func): the function to decorate
+
+        Returns:
+            func: the decorated function
+        """
+
+        def func(*args, **kw):
+            """Decorated functionality, mutexing wrapped function.
+
+            Args:
+                *args: All args provided to the wrapped function
+                **kw: All kw provided to the wrapped function
+
+            Returns:
+                object: the execution results of f
+            """
             lock.acquire()
             try:
                 return f(*args, **kw)
             finally:
                 lock.release()
-        return function
+
+        return func
+
     return wrap
 
 
 def oneof(*args):
-    """Returns true iff one of the parameters is true."""
+    """Returns true iff one of the parameters is true.
+
+    Args:
+        *args: arguments to check
+
+    Returns:
+        bool: true iff one of the parameters is true.
+    """
 
     return len([x for x in args if x]) == 1
 
 
 def full_to_type_name(full_resource_name):
-    """Creates a type/name format from full resource name."""
+    """Creates a type/name format from full resource name.
+
+    Args:
+        full_resource_name (str): the full_resource_name of the resource
+
+    Returns:
+        str: type_name of that resource
+    """
 
     return '/'.join(full_resource_name.split('/')[-2:])
 
 
 def to_full_resource_name(full_parent_name, resource_type_name):
-    """Creates a full resource name by parent full name and type name."""
+    """Creates a full resource name by parent full name and type name.
+
+    Args:
+        full_parent_name (str): the full_resource_name of the parent
+        resource_type_name (str): the full_resource_name of the child
+
+    Returns:
+        str: full_resource_name of the child
+    """
 
     return '{}{}/'.format(full_parent_name, resource_type_name)
 
 
 def to_type_name(resource_type, resource_name):
-    """Creates a type/name from type and name."""
+    """Creates a type/name from type and name.
+
+    Args:
+        resource_type (str): the resource type
+        resource_name (str): the resource name
+
+    Returns:
+        str: type_name of the resource
+    """
 
     return '{}/{}'.format(resource_type, resource_name)
 
 
 def split_type_name(resource_type_name):
-    """."""
+    """Split the type name of the resource
+
+    Args:
+        resource_type_name (str): the type_name of the resource
+
+    Returns:
+        tuples: type and name of the resource
+    """
 
     return resource_type_name.split('/')
 
 
 def resource_to_type_name(resource):
-    """Creates a type/name format from a resource dbo."""
+    """Creates a type/name format from a resource dbo.
+
+    Args:
+        resource (object): the resource to get the the type_name
+
+    Returns:
+        str: type_name of the resource
+    """
 
     return resource.type_name
 
 
 def get_sql_dialect(session):
-    """Return the active SqlAlchemy dialect."""
+    """Return the active SqlAlchemy dialect.
+
+    Args:
+        session (object): the session to check for SqlAlchemy dialect
+
+    Returns:
+        str: name of the SqlAlchemy dialect
+    """
 
     return session.bind.dialect.name
+
 
 def get_resources_from_full_name(full_name):
     """Parse resource info from full name.
@@ -136,3 +244,17 @@ def get_resources_from_full_name(full_name):
     resource_iter = iter(full_name_parts)
     for resource_id, resource_type in izip(resource_iter, resource_iter):
         yield resource_type, resource_id
+
+
+def get_key_from_type_name(type_name):
+    """Returns the key from type_name.
+
+    Args:
+        type_name (str): Type name.
+
+    Returns:
+        str: Resource key.
+    """
+    if '/' in type_name:
+        return type_name.split('/')[-1]
+    return type_name

@@ -19,20 +19,23 @@ import hashlib
 import json
 
 from sqlalchemy import Column
-from sqlalchemy import String, Integer, Text
+from sqlalchemy import DateTime
+from sqlalchemy import String
+from sqlalchemy import Integer
+from sqlalchemy import Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
 from google.cloud.forseti.common.data_access import violation_map as vm
 from google.cloud.forseti.common.util import logger
+from google.cloud.forseti.common.util import date_time
 from google.cloud.forseti.services import db
-
 
 LOGGER = logger.get_logger(__name__)
 
-
 # pylint: disable=no-member
+
 
 def define_violation(dbengine):
     """Defines table class for violations.
@@ -55,6 +58,7 @@ def define_violation(dbengine):
         __tablename__ = violations_tablename
 
         id = Column(Integer, primary_key=True)
+        created_at_datetime = Column(DateTime())
         full_name = Column(String(1024))
         inventory_data = Column(Text(16777215))
         inventory_index_id = Column(String(256))
@@ -111,8 +115,8 @@ def define_violation(dbengine):
                 inventory_index_id (str): Id of the inventory index.
             """
             with self.violationmaker() as session:
+                created_at_datetime = date_time.get_utc_now_datetime()
                 for violation in violations:
-
                     violation_hash = _create_violation_hash(
                         violation.get('full_name', ''),
                         violation.get('inventory_data', ''),
@@ -130,7 +134,8 @@ def define_violation(dbengine):
                         violation_data=json.dumps(
                             violation.get('violation_data')),
                         inventory_data=violation.get('inventory_data'),
-                        violation_hash=violation_hash
+                        violation_hash=violation_hash,
+                        created_at_datetime=created_at_datetime
                     )
 
                     session.add(violation)
@@ -147,18 +152,17 @@ def define_violation(dbengine):
             with self.violationmaker() as session:
                 if inventory_index_id:
                     return (
-                        session.query(self.TBL_VIOLATIONS)
-                        .filter(
+                        session.query(self.TBL_VIOLATIONS).filter(
                             self.TBL_VIOLATIONS.inventory_index_id ==
-                            inventory_index_id)
-                        .all())
+                            inventory_index_id).all()
+                    )
                 return (
-                    session.query(self.TBL_VIOLATIONS)
-                    .all())
+                    session.query(self.TBL_VIOLATIONS).all())
 
     base.metadata.create_all(dbengine)
 
     return ViolationAccess
+
 
 # pylint: disable=invalid-name
 def convert_sqlalchemy_object_to_dict(sqlalchemy_obj):
@@ -173,6 +177,7 @@ def convert_sqlalchemy_object_to_dict(sqlalchemy_obj):
 
     return {c.key: getattr(sqlalchemy_obj, c.key)
             for c in inspect(sqlalchemy_obj).mapper.column_attrs}
+
 
 def map_by_resource(violation_rows):
     """Create a map of violation types to violations of that resource.
@@ -189,18 +194,26 @@ def map_by_resource(violation_rows):
     v_by_type = defaultdict(list)
 
     for v_data in violation_rows:
+
         try:
             v_data['violation_data'] = json.loads(v_data['violation_data'])
-            v_data['inventory_data'] = json.loads(v_data['inventory_data'])
         except ValueError:
             LOGGER.warn('Invalid violation data, unable to parse json for %s',
                         v_data['violation_data'])
+
+        # inventory_data can be regular python string
+        try:
+            v_data['inventory_data'] = json.loads(v_data['inventory_data'])
+        except ValueError:
+            v_data['inventory_data'] = json.loads(
+                json.dumps(v_data['inventory_data']))
 
         v_resource = vm.VIOLATION_RESOURCES.get(v_data['violation_type'])
         if v_resource:
             v_by_type[v_resource].append(v_data)
 
     return dict(v_by_type)
+
 
 def _create_violation_hash(violation_full_name, inventory_data, violation_data):
     """Create a hash of violation data.
@@ -227,9 +240,10 @@ def _create_violation_hash(violation_full_name, inventory_data, violation_data):
         return ''
 
     try:
+        # Group resources do not have full name.  Issue #1072
         violation_hash.update(
-            violation_full_name +
-            inventory_data +
+            json.dumps(violation_full_name) +
+            json.dumps(inventory_data, sort_keys=True) +
             json.dumps(violation_data, sort_keys=True)
         )
     except TypeError as e:

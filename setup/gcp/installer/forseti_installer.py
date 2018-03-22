@@ -20,14 +20,61 @@ from abc import abstractmethod
 
 import sys
 
-from configs.config import Config
 from util import constants
 from util import files
 from util import gcloud
 from util import utils
 
 
-class ForsetiInstaller:
+class ForsetiInstructions(object):
+    """Forseti setup instructions."""
+
+    def __init__(self):
+        """Init."""
+        self.deployed_branch = ''
+        self.deployment_templates = []
+        self.configurations = []
+        self.other_messages = []
+
+    def merge_head(self, other_instruction):
+        """Merge instructions, input instructions will be merged to the head
+        of the current instructions.
+
+        Args:
+            other_instruction (ForsetiInstructions): The other instructions.
+        """
+        self.deployed_branch = other_instruction.deployed_branch
+        self.deployment_templates = (
+            other_instruction.deployment_templates + self.deployment_templates)
+        self.configurations = (
+            other_instruction.configurations + self.configurations)
+        self.other_messages = (other_instruction.other_messages +
+                               self.other_messages)
+
+    def __str__(self):
+        """Str.
+
+        Returns:
+            str: String representation of ForsetiInstructions.
+        """
+        message = self.deployed_branch
+
+        deployment_template_gcs_paths = '\t' + '\n\t'.join(
+            self.deployment_templates)
+        message += constants.MESSAGE_DEPLOYMENT_TEMPLATE_LOCATION.format(
+            deployment_template_gcs_paths=deployment_template_gcs_paths)
+
+        configuration_paths = '\t' + '\n\t'.join(self.configurations)
+        message += constants.MESSAGE_FORSETI_CONFIGURATION_GENERATED.format(
+            forseti_config_file_paths=configuration_paths
+        )
+
+        message += '\n'.join(self.other_messages)
+
+        return message
+
+
+class ForsetiInstaller(object):
     """Forseti installer base class (abstract)"""
     __metaclass__ = ABCMeta
 
@@ -35,41 +82,89 @@ class ForsetiInstaller:
     branch = None
     project_id = None
     organization_id = None
-    gcp_service_account = None
+    gcp_service_acct_email = None
     user_can_grant_roles = True
-    config = Config()
 
     @abstractmethod
-    def __init__(self):
-        """Initialize."""
-        pass
+    def __init__(self, config=None, previous_installer=None):
+        """Initialize.
 
-    def run_setup(self):
-        """Run the setup steps"""
-        utils.print_banner('Installing Forseti {} v{}'.format(
-            self.config.installer_type, utils.get_forseti_version()))
+        Args:
+            config (Config): The configuration object.
+            previous_installer (ForsetiInstaller): The previous ran installer,
+                we can get the installer environment information from it.
+        """
+        self.config = config
+        if previous_installer:
+            self.populate_installer_environment(previous_installer)
 
-        # Preflight checks
-        self.preflight_checks()
+    def run_setup(self,
+                  setup_continuation=False,
+                  final_setup=True,
+                  previous_instructions=None):
+        """Run the setup steps.
 
-        # Deployment
+        If setup_continuation is True, we don't need to run the pre-flight
+        checks any more because it has been done in the previous installation.
+
+        Args:
+            setup_continuation (bool): If this is a continuation of the
+                previous setup.
+            final_setup (bool): The final setup.
+            previous_instructions (ForsetiInstructions): Post installation
+                instructions from previous installation.
+
+        Returns:
+            ForsetiInstructions: Forseti instructions.
+        """
+        utils.print_installation_header('Installing Forseti {}'.format(
+            self.config.installation_type.capitalize()))
+
+        if not setup_continuation:
+            self.preflight_checks()
+
+        # Create/Reuse service account(s).
+        self.create_or_reuse_service_accts()
+
+        # Create configuration file and deployment template.
+        (conf_file_path,
+         deployment_tpl_path) = self.create_resource_files()
+
+        # Deployment.
         bucket_name = self.generate_bucket_name()
-        conf_file_path = self.generate_forseti_conf()
-        deployment_tpl_path = self.generate_deployment_templates()
+        deploy_success, _ = self.deploy(deployment_tpl_path,
+                                        conf_file_path,
+                                        bucket_name)
 
-        deploy_success, deployment_name = self.deploy(deployment_tpl_path,
+        # After deployment.
+        instructions = self.post_install_instructions(deploy_success,
                                                       conf_file_path,
                                                       bucket_name)
 
-        # After deployment
-        self.post_install_instructions(deploy_success,
-                                       deployment_name,
-                                       deployment_tpl_path,
-                                       conf_file_path,
-                                       bucket_name)
+        if previous_instructions is not None:
+            instructions.merge_head(previous_instructions)
+
+        if final_setup:
+            utils.print_banner('Forseti Post-Setup Instructions')
+            print(instructions)
+
+        return instructions
+
+    def create_resource_files(self):
+        """Create configuration file and deployment template.
+
+        Returns:
+            str: Configuration file path.
+            str: Deployment template path.
+        """
+        conf_file_path = self.generate_forseti_conf()
+        deployment_tpl_path = self.generate_deployment_templates()
+
+        return conf_file_path, deployment_tpl_path
 
     def preflight_checks(self):
         """Pre-flight checks"""
+        utils.print_banner('Pre-installation checks')
         self.check_run_properties()
         self.branch = utils.infer_version(self.config.advanced_mode)
         self.project_id, authed_user, is_cloudshell = gcloud.get_gcloud_info()
@@ -79,10 +174,16 @@ class ForsetiInstaller:
                                          is_cloudshell)
         self.organization_id = gcloud.lookup_organization(self.project_id)
         gcloud.check_billing_enabled(self.project_id, self.organization_id)
-        self.format_gcp_service_acct_id()
-        self.gcp_service_account = gcloud.create_or_reuse_service_acct(
-            'gcp_service_account',
-            self.gcp_service_account,
+
+    def create_or_reuse_service_accts(self):
+        """Create or reuse service accounts."""
+        utils.print_banner('Creating/Reusing Service Account(s)')
+        gcp_service_acct_email, gcp_service_acct_name = (
+            self.format_gcp_service_acct_id())
+        self.gcp_service_acct_email = gcloud.create_or_reuse_service_acct(
+            'GCP Service Account',
+            gcp_service_acct_name,
+            gcp_service_acct_email,
             self.config.advanced_mode,
             self.config.dry_run)
 
@@ -98,29 +199,56 @@ class ForsetiInstaller:
             bool: Whether or not the deployment was successful
             str: Deployment name
         """
-        deployment_name, return_code = gcloud.create_deployment(
+        deployment_name = gcloud.create_deployment(
             self.project_id,
             self.organization_id,
             deployment_tpl_path,
-            self.config.installer_type,
-            self.config.datetimestamp,
+            self.config.installation_type,
+            self.config.timestamp,
             self.config.dry_run)
 
-        deployment_completed = not return_code
+        status_checker = (lambda: gcloud.check_deployment_status(
+            deployment_name, constants.DeploymentStatus.DONE))
+        loading_message = 'Waiting for deployment to be completed...'
+        deployment_completed = utils.start_loading(
+            max_loading_time=900,
+            exit_condition_checker=status_checker,
+            message=loading_message)
+
+        if not deployment_completed:
+            # If after 15 mins and the deployment is still not completed, there
+            # is something wrong with the deployment.
+            print ('Deployment failed.')
+            sys.exit(1)
 
         if deployment_completed:
             # If deployed successfully, make sure the VM has been initialized,
             # copy configuration file, deployment template file and
             # rule files to the GCS bucket
+
+            if self.config.dry_run:
+                print('This is a dry run, will not copy any files.')
+
+            utils.print_banner('Backing Up Important Files To GCS')
+
             conf_output_path = constants.FORSETI_CONF_PATH.format(
                 bucket_name=bucket_name,
-                installer_type=self.config.installer_type)
+                installation_type=self.config.installation_type)
+
+            print('Copying the Forseti {} configuration file to:\n\t{}'
+                  .format(self.config.installation_type, conf_output_path))
+
             files.copy_file_to_destination(
                 conf_file_path, conf_output_path,
                 is_directory=False, dry_run=self.config.dry_run)
 
             deployment_tpl_output_path = (
                 constants.DEPLOYMENT_TEMPLATE_OUTPUT_PATH.format(bucket_name))
+
+            print('Copying the Forseti {} deployment template to:\n\t{}'
+                  .format(self.config.installation_type,
+                          deployment_tpl_output_path))
+
             files.copy_file_to_destination(
                 deployment_tpl_path, deployment_tpl_output_path,
                 is_directory=False, dry_run=self.config.dry_run)
@@ -133,35 +261,41 @@ class ForsetiInstaller:
         Args:
             vm_name (str): Name of the VM instance.
         """
-        installer_type = self.config.installer_type.capitalize()
-        utils.print_banner('{} VM Initialization'.format(installer_type))
-        print ('This may take a few minutes.\n')
+
+        installation_type = self.config.installation_type
+        utils.print_banner('Forseti {} VM Initialization'.format(
+            installation_type.capitalize()))
         _, zone, name = gcloud.get_vm_instance_info(vm_name)
 
-        # VT100 control codes, use to remove the last line
-        erase_line = '\x1b[2K'
+        status_checker = (lambda: gcloud.check_vm_init_status(name, zone))
 
-        for i in range(0, constants.MAXIMUM_LOOP_COUNT):
-            dots = '.' * (i % 10)
-            sys.stdout.write('\r{}Initializing VM {}'.format(erase_line, dots))
-            sys.stdout.flush()
-            if gcloud.check_vm_init_status(name, zone):
-                break
-        # print new line
-        print ('\n\nDone.')
+        loading_message = ('Waiting for Forseti {} to be initialized...'
+                           .format(installation_type))
+
+        _ = utils.start_loading(
+            max_loading_time=constants.MAXIMUM_LOADING_TIME_IN_SECONDS,
+            exit_condition_checker=status_checker,
+            message=loading_message)
 
     def check_run_properties(self):
         """Check script run properties."""
-        print('Dry run? %s' % self.config.dry_run)
-        print('Advanced mode? %s' % self.config.advanced_mode)
+        print('Dry run: %s' % self.config.dry_run)
+        print('Advanced mode: %s' % self.config.advanced_mode)
 
     def format_gcp_service_acct_id(self):
-        """Format the service account ids."""
-        self.gcp_service_account = utils.format_service_acct_id(
-            'gcp',
-            'reader',
-            self.config.timestamp,
-            self.project_id)
+        """Format the service account ids.
+
+        Returns:
+            str: GCP service account email.
+            str: GCP service account name.
+        """
+        service_account_email, service_account_name = (
+            utils.generate_service_acct_info(
+                'gcp',
+                self.config.installation_type,
+                self.config.timestamp,
+                self.project_id))
+        return service_account_email, service_account_name
 
     def generate_bucket_name(self):
         """Generate GCS bucket name.
@@ -170,8 +304,7 @@ class ForsetiInstaller:
             str: Name of the GCS bucket
         """
         return constants.DEFAULT_BUCKET_FMT_V2.format(
-            self.project_id,
-            self.config.installer_type,
+            self.config.installation_type,
             self.config.timestamp)
 
     @abstractmethod
@@ -200,17 +333,13 @@ class ForsetiInstaller:
         Returns:
             str: Deployment template path
         """
-        print('Generate Deployment Manager templates...')
-
         deploy_values = self.get_deployment_values()
 
         deployment_tpl_path = files.generate_deployment_templates(
-            self.config.installer_type,
+            self.config.installation_type,
             deploy_values,
-            self.config.datetimestamp)
+            self.config.timestamp)
 
-        print('\nCreated a deployment template:\n    %s\n' %
-              deployment_tpl_path)
         return deployment_tpl_path
 
     def generate_forseti_conf(self):
@@ -219,66 +348,72 @@ class ForsetiInstaller:
         Returns:
             str: Forseti configuration file path
         """
-        # Create a forseti_conf_{INSTALLER_TYPE}_$TIMESTAMP.yaml config file
+        # Create a forseti_conf_{INSTALLATION_TYPE}_$TIMESTAMP.yaml config file
         # with values filled in.
-        print('\nGenerate forseti_conf_{}_{}.yaml...'
-              .format(self.config.installer_type, self.config.datetimestamp))
 
         conf_values = self.get_configuration_values()
 
         forseti_conf_path = files.generate_forseti_conf(
-            self.config.installer_type,
+            self.config.installation_type,
             conf_values,
-            self.config.datetimestamp)
+            self.config.timestamp)
 
-        print('\nCreated forseti_conf_{}_{}.yaml config file:\n    {}\n'.
-              format(self.config.installer_type,
-                     self.config.datetimestamp,
-                     forseti_conf_path))
         return forseti_conf_path
 
-    def post_install_instructions(self, deploy_success, deployment_name,
-                                  deployment_tpl_path, forseti_conf_path,
-                                  bucket_name):
+    def post_install_instructions(self, deploy_success,
+                                  forseti_conf_path, bucket_name):
         """Show post-install instructions.
 
-        Print link for deployment manager dashboard
-        Print link to go to G Suite service account and enable DWD
+        For example: link for deployment manager dashboard and
+        link to go to G Suite service account and enable DWD.
 
         Args:
             deploy_success (bool): Whether deployment was successful
-            deployment_name (str): Name of the deployment
-            deployment_tpl_path (str): Deployment template path
             forseti_conf_path (str): Forseti configuration file path
             bucket_name (str): Name of the GCS bucket
-        """
-        utils.print_banner('Post-setup instructions')
 
+        Returns:
+            ForsetiInstructions: Forseti instructions.
+        """
+
+        instructions = ForsetiInstructions()
         if self.config.dry_run:
-            print('This was a dry run, so a deployment was not attempted. '
-                  'You can still create the deployment manually.\n')
+            message = (
+                'This was a dry run, so a deployment was not attempted. '
+                'You can still create the deployment manually.\n')
+            instructions.deployed_branch = message
         elif deploy_success:
-            print(constants.MESSAGE_FORSETI_BRANCH_DEPLOYED.format(
-                self.branch))
+            instructions.deployed_branch = (
+                constants.MESSAGE_FORSETI_BRANCH_DEPLOYED.format(self.branch))
         else:
-            print(constants.MESSAGE_DEPLOYMENT_HAD_ISSUES)
+            instructions.deployed_branch = (
+                constants.MESSAGE_DEPLOYMENT_HAD_ISSUES)
 
         deploy_tpl_gcs_path = constants.DEPLOYMENT_TEMPLATE_OUTPUT_PATH.format(
             bucket_name)
 
-        print(constants.MESSAGE_DEPLOYMENT_TEMPLATE_LOCATION.format(
-            deployment_tpl_path, deploy_tpl_gcs_path))
+        instructions.deployment_templates.append(deploy_tpl_gcs_path)
 
         if self.config.dry_run:
-            print(constants.MESSAGE_FORSETI_CONFIGURATION_GENERATED_DRY_RUN
-                  .format(forseti_conf_path, bucket_name))
+            instructions.configurations.append(
+                constants.MESSAGE_FORSETI_CONFIGURATION_GENERATED_DRY_RUN
+                .format(forseti_conf_path, bucket_name))
         else:
-            print(constants.MESSAGE_VIEW_DEPLOYMENT_DETAILS.format(
-                deployment_name,
-                self.project_id,
-                self.organization_id))
+            forseti_gcs_path = (
+                '{gcs_bucket}/configs/{installation_type}/'
+                'forseti_conf_{installation_type}.yaml').format(
+                    gcs_bucket=bucket_name,
+                    installation_type=self.config.installation_type
+                )
+            instructions.configurations.append(forseti_gcs_path)
+        return instructions
 
-            print(constants.MESSAGE_FORSETI_CONFIGURATION_GENERATED.format(
-                installer_type=self.config.installer_type,
-                datetimestamp=self.config.datetimestamp,
-                bucket_name=bucket_name))
+    def populate_installer_environment(self, other_installer):
+        """Populate the current installer environment from a given installer.
+
+        Args:
+            other_installer (ForsetiInstaller): The other installer.
+        """
+        self.branch = other_installer.branch
+        self.project_id = other_installer.project_id
+        self.organization_id = other_installer.organization_id

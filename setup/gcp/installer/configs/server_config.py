@@ -27,10 +27,10 @@ class ServerConfig(Config):
             kwargs (dict): The kwargs.
         """
         super(ServerConfig, self).__init__(**kwargs)
-        self.installer_type = 'server'
-        self.cloudsql_instance = '{}-{}'.format(
-            'forseti-security',
-            self.datetimestamp)
+        self.installation_type = 'server'
+        self.cloudsql_instance = '{}-{}-{}'.format('forseti',
+                                                   self.installation_type,
+                                                   self.timestamp)
         self.cloudsql_region = kwargs.get('cloudsql_region')
 
         # forseti_conf_server.yaml.in properties

@@ -52,13 +52,13 @@ REQUIRED_PACKAGES = [
     'simple-crypt>=4.1.7',
     # Setup related.
     'google-apputils>=0.4.2',
-    'python-gflags>=3.1.1',
     'grpcio',
     'grpcio-tools',
     'protobuf>=3.2.0',
     # Testing related.
     'mock>=2.0.0',
     'parameterized>=0.6.1',
+    'ruamel.yaml>=0.15.35',
     'pylint',
     'pylint-quotes',
     'SQLAlchemy>=1.1.9',
