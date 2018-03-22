@@ -451,6 +451,9 @@ class Organization(Resource):
         Args:
             client (object): GCP API client
 
+        Returns:
+            dict: organization IAM Policy
+        """
         try:
             return client.get_organization_iam_policy(self['name'])
         except Exception as e:
