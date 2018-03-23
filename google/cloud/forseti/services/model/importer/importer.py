@@ -193,6 +193,12 @@ class InventoryImporter(object):
                 self._store_resource(None, last_res_type)
                 self.session.flush()
 
+                for enabled_apis in inventory.iter(gcp_type_list,
+                                                   fetch_enabled_apis=True):
+                    item_counter += 1
+                    self._convert_enabled_apis(enabled_apis)
+                self.session.flush()
+
                 for policy in inventory.iter(gcp_type_list,
                                              fetch_dataset_policy=True):
                     item_counter += 1
@@ -629,6 +635,26 @@ class InventoryImporter(object):
             parent=parent)
         self.session.add(resource)
         self._add_to_cache(dataset, resource)
+
+    def _convert_enabled_apis(self, enabled_apis):
+        """Convert a description of enabled APIs to a database object.
+
+        Args:
+            enabled_apis (object): Enabled APIs description to store.
+        """
+        parent, full_res_name = self._get_parent(enabled_apis)
+        apis_type_name = to_type_name(
+            enabled_apis.get_type_class(),
+            parent.type_name)
+        apis_res_name = to_full_resource_name(full_res_name, apis_type_name)
+        self.session.add(
+            self.dao.TBL_RESOURCE(
+                full_name=apis_res_name,
+                type_name=apis_type_name,
+                name=enabled_apis.get_key(),
+                type=enabled_apis.get_type_class(),
+                data=enabled_apis.get_data_raw(),
+                parent=parent))
 
     def _convert_dataset_policy(self, dataset_policy):
         """Convert a dataset policy to a database object.
