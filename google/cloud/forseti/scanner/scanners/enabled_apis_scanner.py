@@ -71,7 +71,7 @@ class EnabledApisScanner(base_scanner.BaseScanner):
             for api in violation.apis:
                 violation_data = {
                     'full_name': violation.full_name,
-                    'api_name': api.api_name,
+                    'api_name': api,
                 }
 
                 yield {
