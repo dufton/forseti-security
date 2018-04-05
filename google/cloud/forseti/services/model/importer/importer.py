@@ -645,7 +645,7 @@ class InventoryImporter(object):
         parent, full_res_name = self._get_parent(enabled_apis)
         apis_type_name = to_type_name(
             enabled_apis.get_type_class(),
-            parent.type_name)
+            ':'.join(parent.type_name.split('/')))
         apis_res_name = to_full_resource_name(full_res_name, apis_type_name)
         self.session.add(
             self.dao.TBL_RESOURCE(
