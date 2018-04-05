@@ -265,20 +265,61 @@ class IamPolicyTest(ForsetiTestCase):
                     'members': ['user:def@company.com',
                                 'group:xyz@somewhere.co']
                 },
+            ],
+            'auditConfigs': [
+                {
+                    'auditLogConfigs': [
+                        {
+                            'logType': 'ADMIN_READ'
+                        },
+                        {
+                            'logType': 'DATA_WRITE'
+                        },
+                        {
+                            'logType': 'DATA_READ'
+                        }
+                    ],
+                    'service': 'allServices'
+                },
+                {
+                    'auditLogConfigs': [
+                        {
+                            'exemptedMembers': [
+                                'abc@company.com',
+                                'def@company.com'
+                            ],
+                            'logType': 'ADMIN_READ'
+                        }
+                    ],
+                    'service': 'cloudsql.googleapis.com'
+                }
             ]
         }
         iam_policy = IamPolicy.create_from(policy_json)
         actual_roles = [b.role_name for b in iam_policy.bindings]
         actual_members = [_get_member_list(b.members)
                           for b in iam_policy.bindings]
+        actual_audit_configs = {a.service : a.log_configs
+                                for a in iam_policy.audit_configs}
 
         expected_roles = ['roles/editor', 'roles/viewer']
         expected_members = [['user:abc@company.com'],
                             ['user:def@company.com',
                              'group:xyz@somewhere.co']]
+        expected_audit_configs = {
+            'allServices': {
+                'ADMIN_READ': set(),
+                'DATA_WRITE': set(),
+                'DATA_READ': set()
+            },
+            'cloudsql.googleapis.com': {
+                'ADMIN_READ': set(['abc@company.com', 'def@company.com'])
+            },
+        }
 
         self.assertEqual(expected_roles, actual_roles)
         self.assertEqual(expected_members, actual_members)
+        self.assertEqual(expected_audit_configs, actual_audit_configs)
 
     def test_empty_policy_has_zero_length_bindings(self):
         """Test that an empty policy has no bindings."""

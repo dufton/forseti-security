@@ -23,6 +23,9 @@ class InvalidResourceTypeError(Error):
     """Invalid Resource Type Error."""
     pass
 
+class InvalidIamAuditConfigError(Error):
+    """Error for invalid IAM Audit Configs."""
+    pass
 
 class InvalidIamPolicyError(Error):
     """Error for invalid IAM policies."""

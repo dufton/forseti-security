@@ -44,6 +44,7 @@ class IamPolicy(object):
     def __init__(self):
         """Initialize."""
         self.bindings = []
+        self.audit_configs = []
 
     @classmethod
     def create_from(cls, policy_json):
@@ -63,6 +64,8 @@ class IamPolicy(object):
 
         policy.bindings = [IamPolicyBinding.create_from(b)
                            for b in policy_json.get('bindings', [])]
+        policy.audit_configs = [IamAuditConfig.create_from(a)
+                                for a in policy_json.get('auditConfigs', [])]
 
         return policy
 
@@ -77,7 +80,8 @@ class IamPolicy(object):
         """
         if not isinstance(other, type(self)):
             return NotImplemented
-        return self.bindings == other.bindings
+        return (self.bindings == other.bindings and
+                self.audit_configs == other.audit_configs)
 
     def __ne__(self, other):
         """Tests inequality of IamPolicy.
@@ -96,6 +100,9 @@ class IamPolicy(object):
         Returns:
             str: Representation of IamPolicy
         """
+        if self.audit_configs:
+          return 'IamPolicy: <bindings={}, audit_configs={}>'.format(
+              self.bindings, self.audit_configs)
         return 'IamPolicy: <bindings={}>'.format(self.bindings)
 
     def is_empty(self):
@@ -341,3 +348,75 @@ class IamPolicyMember(object):
                 (self.type == other_member.type and
                  self.name_pattern.match(other_member.name)) or
                 self._is_matching_domain(other_member))
+
+
+class IamAuditConfig(object):
+    """IAM Audit Config."""
+
+    ALL_SERVICES = 'allServices'
+
+    def __init__(self, service, log_configs):
+        """Initialize.
+
+        Args:
+            service (str): The string name of the service.
+            log_configs (list): The list of auditLogConfigs for this service.
+        """
+        if not service or not log_configs:
+            raise errors.InvalidIamAuditConfigError(
+                ('Invalid IAM audit config: '
+                 'service={}, log_configs={}'.format(service, log_configs)))
+        self.service = service
+        self.log_configs = {a.get('logType'): set(a.get('exemptedMembers', []))
+                            for a in log_configs}
+
+    def __eq__(self, other):
+        """Tests equality of IamAuditConfig.
+
+        Args:
+            other (object): Object to compare.
+
+        Returns:
+            bool: Whether objects are equal.
+        """
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        return (self.service == other.service and
+                self.log_configs == other.log_configs)
+
+    def __ne__(self, other):
+        """Tests inequality of IamAuditConfig.
+
+        Args:
+            other (object): Object to compare.
+
+        Returns:
+            bool: Whether objects are not equal.
+        """
+        return not self == other
+
+    def __repr__(self):
+        """String representation of IamAuditConfig.
+
+        Returns:
+            str: The representation of IamAuditConfig.
+        """
+        return 'IamAuditConfig: <service={}, log_configs={}>'.format(
+            self.service, self.log_configs)
+
+    @classmethod
+    def create_from(cls, audit_config):
+        """Create an IamAuditConfig from an audit config dict.
+
+        Args:
+            audit_config (dict): The audit config (service mapped to
+                audit log configs).
+
+        Returns:
+            IamAuditConfig: A new IamAuditConfig created with the
+                service and audit log configs.
+        """
+        return cls(audit_config.get('service'),
+                   audit_config.get('auditLogConfigs'))
+
+
