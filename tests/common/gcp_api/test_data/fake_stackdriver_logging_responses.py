@@ -14,10 +14,10 @@
 
 """Test data for Stackdriver Logging GCP api responses."""
 
-FAKE_ORG_ID = "1234567890"
-FAKE_FOLDER_ID = "987"
-FAKE_BILLING_ACCOUNT_ID = "1234-56789"
-FAKE_PROJECT_ID = "forseti-system-test"
+FAKE_ORG_ID = '1234567890'
+FAKE_FOLDER_ID = '987'
+FAKE_BILLING_ACCOUNT_ID = '1234-56789'
+FAKE_PROJECT_ID = 'forseti-system-test'
 
 GET_SINKS_PAGE_1 = """
 {
@@ -68,9 +68,9 @@ GET_SINKS_RESPONSES = [GET_SINKS_PAGE_1,
                        GET_SINKS_PAGE_3]
 
 EXPECTED_SINK_NAMES = [
-    "a-log-sink",
-    "another-log-sink",
-    "final-log-sink"]
+    'a-log-sink',
+    'another-log-sink',
+    'final-log-sink']
 
 NOT_FOUND = """
 {

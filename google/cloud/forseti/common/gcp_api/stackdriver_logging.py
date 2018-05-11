@@ -324,4 +324,3 @@ class StackdriverLoggingClient(object):
                 'projects_sinks', e, 'name', name)
             LOGGER.error(api_exception)
             raise api_exception
-
