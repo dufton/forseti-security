@@ -163,6 +163,7 @@ class InventoryImporter(object):
             'subnetwork',
             'cloudsqlinstance',
             'kubernetes_cluster',
+            'sink',
         ]
 
         gsuite_type_list = [
@@ -602,6 +603,9 @@ class InventoryImporter(object):
             'kubernetes_cluster': (None,
                                    self._convert_kubernetes_cluster,
                                    None),
+            'sink': (None,
+                     self._convert_sink,
+                     None),
             None: (None, None, None),
         }
 
@@ -720,6 +724,29 @@ class InventoryImporter(object):
             name=service_config.get_resource_id(),
             type=service_config.get_category(),
             data=service_config.get_resource_data_raw(),
+            parent=parent)
+
+        self.session.add(resource)
+        self._add_to_cache(resource)
+
+    def _convert_sink(self, sink):
+        """Convert a log sink to a database object.
+
+        Args:
+            sink (object): Sink to store.
+        """
+        parent, full_res_name, type_name = self._full_resource_name(sink)
+        if not self._is_resource_unique(type_name):
+            return
+        data = sink.get_resource_data()
+        resource = self.dao.TBL_RESOURCE(
+            full_name=full_res_name,
+            type_name=type_name,
+            name=sink.get_resource_id(),
+            type=sink.get_resource_type(),
+            display_name=data.get('name', ''),
+            email=data.get('writerIdentity', '').split(':')[-1],
+            data=sink.get_resource_data_raw(),
             parent=parent)
 
         self.session.add(resource)
